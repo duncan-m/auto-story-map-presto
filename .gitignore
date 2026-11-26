@@ -1,0 +1,8 @@
+# Local only: the build token, per-build briefs and state, and the mpremote environment.
+.build-token
+builds/
+.venv/
+# Real Wi-Fi details and tokens. secrets.py.example is the template.
+secrets.py
+.DS_Store
+__pycache__/
