@@ -20,7 +20,7 @@
 
 import { execFileSync } from "node:child_process";
 import { randomBytes, timingSafeEqual } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, watch, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, watch, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { networkInterfaces } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -112,6 +112,38 @@ function readState() {
   }
 }
 
+// Stories being built outside the Presto (from the Claude app, say): a git worktree in the
+// repo on a story branch such as feat/esm-116-serve-cli-over-mcp. Keyed by story ID, in the
+// same shape as state.json entries, but never written to it. The main checkout is skipped.
+function worktreeBuilds() {
+  const found = {};
+  let out = "";
+  try {
+    out = execFileSync("git", ["worktree", "list", "--porcelain"], { cwd: repo, timeout: 5000, stdio: ["ignore", "pipe", "ignore"] }).toString();
+  } catch {
+    return found;
+  }
+  for (const entry of out.split("\n\n").slice(1)) {
+    const path = entry.match(/^worktree (.+)$/m)?.[1];
+    const branch = entry.match(/^branch refs\/heads\/(.+)$/m)?.[1];
+    const id = branch?.match(/^feat\/([a-z]+-\d+)-/i)?.[1].toUpperCase();
+    if (!path || !id || found[id]) continue;
+    let startedAt;
+    try {
+      startedAt = statSync(path).birthtime.toISOString();
+    } catch {
+      continue;
+    }
+    found[id] = { branch, worktree: path, startedAt, elsewhere: true };
+  }
+  return found;
+}
+
+// Presto builds and builds started elsewhere together. Presto entries win.
+function allBuilds() {
+  return { ...worktreeBuilds(), ...readState() };
+}
+
 function writeState(state) {
   mkdirSync(buildsDir, { recursive: true });
   writeFileSync(statePath, JSON.stringify(state, null, 2));
@@ -199,6 +231,8 @@ async function startBuild(id, modeName = "plan") {
   if (!story) return [404, { error: `${id} is not one of the stories ready to build.` }];
   const state = readState();
   if (state[id] && !state[id].dryRun) return [409, { error: `${id} already has a session, started ${state[id].startedAt}.` }];
+  const elsewhere = worktreeBuilds()[id];
+  if (elsewhere) return [409, { error: `${id} is already being built in ${elsewhere.worktree}.` }];
 
   const lib = await library();
   const document = lib.parseStoryMap(readFileSync(join(repo, map), "utf8"));
@@ -274,7 +308,7 @@ export function buildFeed() {
   const releaseIndex = new Map(releases.map((r, i) => [r.id, i]));
   const releaseTitle = new Map(releases.map((r) => [r.id, r.title]));
   const order = new Map(stories.map((s, i) => [s.id, i]));
-  const state = readState();
+  const state = allBuilds();
 
   const planned = stories.filter((s) => s.status === "planned");
   const isReady = (s) => (s.dependsOn ?? []).every((d) => DONE.has(d.status));
@@ -307,7 +341,8 @@ export function buildFeed() {
     build: withCost(s.id, buildStatus(s.id, state)),
   });
 
-  // Every story started from the Presto, so it stays visible after it leaves the ready list.
+  // Every story started from the Presto or with a worktree elsewhere, so it stays visible
+  // after it leaves the ready list.
   // A merged build drops off a day after it merges.
   // Each carries the story's details too, so its card opens a detail view even after
   // the story leaves the ready list.
@@ -317,6 +352,7 @@ export function buildFeed() {
     .map(([id, b]) => ({
       ...(byId.has(id) ? compact(byId.get(id)) : { id, title: clip(b.title ?? id, 90) }),
       branch: b.branch,
+      elsewhere: Boolean(b.elsewhere),
       build: withCost(id, buildStatus(id, state)),
     }))
     .filter(({ build }) => build?.status !== "merged" || !build.mergedAt || Date.now() - Date.parse(build.mergedAt) < 24 * 3600_000)
