@@ -7,15 +7,17 @@
 # Fetches FEED_URL (served by feed.mjs on your computer) and shows the planned
 # stories whose dependencies have all landed, in release order.
 #
-# List:    drag up and down to scroll, tap a story to open it, tap the header to refresh.
+# List:    drag up and down to scroll, tap a story to open it, tap the header to
+#          refresh, and tap Exit (top right) to go back to the launcher.
 # Detail:  drag up and down to scroll, swipe left or right for the next or
 #          previous story, tap the header to go back, and tap Build with Claude
-#          to start a Claude Code session for the story on your computer. It
-#          asks its questions in the Claude app before it plans or builds.
+#          to start a Claude Code session for the story on your computer, then
+#          pick Auto, Accept edits or Plan for the session's permission mode.
 
 import time
 import gc
 import json
+import machine
 from presto import Presto
 import secrets
 
@@ -68,7 +70,18 @@ CACHE_PATH = "story_map_cache.json"   # last feed, shown at once while Wi-Fi con
 BTN_H = 64
 DETAIL_H = BODY_H - BTN_H
 
-DRAG_START = 12   # pixels a touch must move before it counts as a drag
+# Build with Claude options: (mode sent to feed.mjs, label, what it does).
+MODES = [
+    ("auto", "Auto", "Builds, then opens a PR"),
+    ("accept-edits", "Accept edits", "Asks first, then builds"),
+    ("plan", "Plan", "Asks, then you approve a plan"),
+]
+MODE_TOP = HEADER_H + 112
+MODE_H = 66
+MODE_GAP = 8
+
+EXIT_X = WIDTH - 110  # header taps right of this leave the app; elsewhere they refresh
+DRAG_START = 12  # pixels a touch must move before it counts as a drag
 SWIPE_MIN = 70    # horizontal pixels for a swipe between stories
 
 feed = None
@@ -83,6 +96,7 @@ detail_source = "ready"   # which list the open story belongs to: "ready" or "bu
 detail_scroll = 0
 detail_lines = []      # (text, pen, scale, line height)
 pressed_card = -1
+pressed_mode = -1      # Build with Claude option under the finger
 last_fetch = -REFRESH_SECONDS * 1000
 notices = []           # merged builds waiting to be announced
 notice_return = "list"
@@ -404,9 +418,10 @@ def draw_list():
     draw_header_bar()
     display.set_pen(ACCENT)
     display.text("NEXT UP", MARGIN, 12, WIDTH, 3)
+    exit_left = pill("Exit", WIDTH - MARGIN, 12, PILL, TEXT)
     count = str(feed["counts"]["ready"]) + " ready"
     display.set_pen(TEXT)
-    display.text(count, WIDTH - MARGIN - display.measure_text(count, 2), 16, WIDTH, 2)
+    display.text(count, exit_left - 12 - display.measure_text(count, 2), 16, WIDTH, 2)
     display.set_pen(WARN if error else MUTED)
     line2 = "Offline - last updated " + feed["updated"][-5:] if error else (feed.get("nextRelease") or "")
     display.text(wrap(line2, WIDTH - 2 * MARGIN, 2, 1)[0], MARGIN, 42, WIDTH, 2)
@@ -470,17 +485,6 @@ def open_detail(i, keep_scroll=False, source=None):
     add("  -  ".join(facts), MUTED)
     add(s.get("release") or "", MUTED)
 
-    build = s.get("build") or {}
-    if build.get("status") == "merged":
-        section("Cost")
-        cost = cost_label(build)
-        if cost:
-            tokens = tokens_label(build)
-            add(cost + ("  -  " + tokens if tokens else ""), TEXT, 3)
-            add("Estimated, recorded in PR #" + str(build["pr"]), MUTED)
-        else:
-            add("Not recorded yet in PR #" + str(build["pr"]), MUTED)
-
     if s.get("summary"):
         section("Summary")
         add(s["summary"], TEXT)
@@ -501,6 +505,17 @@ def open_detail(i, keep_scroll=False, source=None):
         section("Jobs")
         for job in s["jobs"]:
             add(job.replace("-", " "), TEXT)
+
+    # Cost is a footnote, not the headline: small and muted, below everything else.
+    build = s.get("build") or {}
+    if build.get("status") == "merged":
+        gap(14)
+        cost = cost_label(build)
+        if cost:
+            tokens = tokens_label(build)
+            add("Est. cost " + cost + ("  -  " + tokens if tokens else ""), MUTED)
+        else:
+            add("Cost not recorded yet in PR #" + str(build["pr"]), MUTED)
 
     gap(20)
     add("Swipe left or right for other " + ("builds" if detail_source == "builds" else "stories"), MUTED)
@@ -563,9 +578,7 @@ def draw_build_button(story):
     display.rectangle(0, y, WIDTH, BTN_H)
     build = build_of(story)
     if build and build["status"] == "merged":
-        cost = cost_label(build)
-        label = "Merged in PR #{}".format(build["pr"]) + ("  -  " + cost if cost else "")
-        bg, fg = MERGED_BG, MERGED_TEXT
+        label, bg, fg = "Merged in PR #{}".format(build["pr"]), MERGED_BG, MERGED_TEXT
     elif build and build["status"] == "closed":
         label, bg, fg = "PR #{} was closed".format(build["pr"]), BUTTON_OFF, MUTED
     elif build and build["status"] == "pr":
@@ -580,30 +593,38 @@ def draw_build_button(story):
     button(label, MARGIN - 4, y + 8, WIDTH - 2 * (MARGIN - 4), BTN_H - 16, bg, fg)
 
 
+def mode_at(y):
+    # The index in MODES of the option button under y, or -1.
+    for i in range(len(MODES)):
+        top = MODE_TOP + i * (MODE_H + MODE_GAP)
+        if top <= y < top + MODE_H:
+            return i
+    return -1
+
+
 def draw_confirm():
     s = detail_items()[detail_index]
     draw_header_bar()
     display.set_pen(ACCENT)
-    display.text("Start a session?", MARGIN, 20, WIDTH, 3)
-    y = HEADER_H + 20
+    display.text("Build with Claude", MARGIN, 20, WIDTH, 3)
+    y = HEADER_H + 16
     display.set_pen(ACCENT)
     display.text(s["id"], MARGIN, y, WIDTH, 3)
     y += 34
     display.set_pen(TEXT)
-    for line in wrap(s["title"], WIDTH - 2 * MARGIN, 2, 3):
+    for line in wrap(s["title"], WIDTH - 2 * MARGIN, 2, 2):
         display.text(line, MARGIN, y, WIDTH, 2)
         y += 22
-    y += 14
-    display.set_pen(MUTED)
-    note = ("Opens Claude Code on your computer in plan mode. It asks its questions "
-            "in the Claude app, then waits for you to approve a plan before it builds.")
-    for line in wrap(note, WIDTH - 2 * MARGIN, 2, 6):
-        display.text(line, MARGIN, y, WIDTH, 2)
-        y += 22
-    half = (WIDTH - 2 * MARGIN - 10) // 2
-    by = HEIGHT - BTN_H + 8
-    button("Cancel", MARGIN, by, half, BTN_H - 16, BUTTON_OFF, TEXT)
-    button("Start", MARGIN + half + 10, by, half, BTN_H - 16, BUTTON, BUTTON_TEXT)
+    w = WIDTH - 2 * MARGIN
+    for i, (key, label, note) in enumerate(MODES):
+        top = MODE_TOP + i * (MODE_H + MODE_GAP)
+        display.set_pen(CARD_DOWN if i == pressed_mode else CARD)
+        display.rectangle(MARGIN, top, w, MODE_H)
+        display.set_pen(ACCENT)
+        display.text(label, MARGIN + 12, top + 12, WIDTH, 2)
+        display.set_pen(MUTED)
+        display.text(wrap(note, w - 24, 2, 1)[0], MARGIN + 12, top + 38, WIDTH, 2)
+    button("Cancel", MARGIN, HEIGHT - BTN_H + 8, w, BTN_H - 16, BUTTON_OFF, TEXT)
 
 
 def draw_result():
@@ -619,7 +640,7 @@ def draw_result():
     display.text("Tap to go back", MARGIN, HEIGHT - 40, WIDTH, 2)
 
 
-def start_build():
+def start_build(mode):
     global view, result_title, result_message, result_ok
     s = detail_items()[detail_index]
     draw_header_bar()
@@ -627,7 +648,7 @@ def start_build():
     display.text("Starting...", MARGIN, 20, WIDTH, 3)
     presto.update()
     try:
-        response = requests.post(BUILD_URL + s["id"], headers={"X-Build-Token": BUILD_TOKEN}, data="")
+        response = requests.post(BUILD_URL + s["id"] + "?mode=" + mode, headers={"X-Build-Token": BUILD_TOKEN}, data="")
         data = response.json()
         response.close()
         result_ok = bool(data.get("ok"))
@@ -666,6 +687,7 @@ def draw_message(title, message, pen):
     draw_header_bar()
     display.set_pen(ACCENT)
     display.text(title, MARGIN, 20, WIDTH, 3)
+    pill("Exit", WIDTH - MARGIN, 12, PILL, TEXT)
     display.set_pen(pen)
     for n, line in enumerate(wrap(message, WIDTH - 2 * MARGIN, 2, 8)):
         display.text(line, MARGIN, HEADER_H + 30 + n * 22, WIDTH, 2)
@@ -689,6 +711,15 @@ def draw():
     presto.update()
 
 
+def exit_app():
+    # Back to the launcher: with no /ramfs/launch.txt, main.py shows the carousel after a reset.
+    leds(0, 0, 0)
+    display.set_pen(BG)
+    display.clear()
+    presto.update()
+    machine.reset()
+
+
 def draw_refreshing():
     draw_header_bar()
     display.set_pen(ACCENT)
@@ -710,11 +741,11 @@ def on_tap(x, y):
         view = "detail"
         return
     if view == "confirm":
-        if y >= HEIGHT - BTN_H:
-            if x >= WIDTH // 2:
-                start_build()
-            else:
-                view = "detail"
+        m = mode_at(y)
+        if m >= 0:
+            start_build(MODES[m][0])
+        elif y >= HEIGHT - BTN_H:
+            view = "detail"
         return
     if view == "detail":
         if y < HEADER_H:
@@ -723,6 +754,8 @@ def on_tap(x, y):
             view = "confirm"
         return
     if y < HEADER_H:
+        if x >= EXIT_X:
+            exit_app()
         draw_refreshing()
         fetch()
         return
@@ -779,12 +812,15 @@ while True:
             if view == "list" and feed and y >= HEADER_H:
                 pressed_card = card_at(y)
                 dirty = pressed_card >= 0
+            elif view == "confirm":
+                pressed_mode = mode_at(y)
+                dirty = pressed_mode >= 0
         else:
             if not moved and (abs(x - start_x) > DRAG_START or abs(y - start_y) > DRAG_START):
                 moved = True
                 axis = "v" if abs(y - start_y) >= abs(x - start_x) else "h"
-                if pressed_card >= 0:
-                    pressed_card = -1
+                if pressed_card >= 0 or pressed_mode >= 0:
+                    pressed_card = pressed_mode = -1
                     dirty = True
             if moved and axis == "v" and y != last_y and feed:
                 on_drag(y - last_y)
@@ -792,7 +828,7 @@ while True:
             last_x, last_y = x, y
     elif down:
         down = False
-        pressed_card = -1
+        pressed_card = pressed_mode = -1
         if not moved:
             on_tap(start_x, start_y)
         elif axis == "h" and abs(last_x - start_x) > SWIPE_MIN:

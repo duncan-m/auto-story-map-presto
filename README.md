@@ -11,7 +11,7 @@ A story counts as available when it is `planned` and every story in its `depends
 
 Touch controls:
 
-- **List:** drag up and down to scroll, tap a story to open it, and tap the header to refresh now.
+- **List:** drag up and down to scroll, tap a story to open it, tap the header to refresh now, and tap **Exit** at the top right to go back to the launcher.
 - **Story:** shows its title, estimate, activity, release, summary, the stories it builds on, the stories it unblocks, and its jobs. Drag up and down to scroll, swipe left for the next story or right for the previous one, and tap the header to go back.
 
 ## Caching
@@ -30,17 +30,23 @@ Touch controls:
 
 ## Build with Claude
 
-The story screen has a **Build with Claude** button. After you confirm, your computer:
+The story screen has a **Build with Claude** button. It asks how the session should run:
+
+- **Auto:** Claude Code in auto mode. It doesn't stop for questions unless it's blocked, builds the story, opens a pull request and sends you the link. Ask it in the Claude app when you want it merged.
+- **Accept edits:** file edits are approved automatically. It asks any questions first, builds, then offers to open a PR.
+- **Plan:** plan mode. It asks its questions, waits for you to approve a plan, builds, then offers to open a PR.
+
+In every mode it opens a PR, or merges one once its checks pass, whenever you ask. After you pick, your computer:
 
 1. Claims the story on this machine with `story-map claim --store .git/story-map-claims`, so a second tap can't start it twice. Nothing is pushed to GitHub.
 2. Creates a git worktree in `.claude/worktrees/<id>` on the story's branch, such as `feat/esm-116-serve-cli-over`, from `origin/main`. Your main checkout isn't touched.
-3. Opens Terminal running Claude Code in plan mode with Remote Control, named after the story. The prompt is the story's brief, the same one the board's **Copy brief** gives.
+3. Opens Terminal running Claude Code in the mode you picked, with Remote Control, named after the story. The prompt is the story's brief, the same one the board's **Copy brief** gives.
 
-`build-rules.md` is added to Claude's system prompt. It tells Claude to ask its clarifying questions first, wait for your answers, get your approval for a plan, and finish with a draft PR. Edit it to change how sessions behave.
+`build-rules.md` and the chosen mode's `build-rules-auto.md`, `build-rules-accept-edits.md` or `build-rules-plan.md` are added to Claude's system prompt. The shared rules keep questions to ones that change what the customer gets or the scope; Claude makes technical choices itself and lists them as assumptions. Edit these files to change how sessions behave.
 
 Answer the session in the Claude app. Find it by the story's name in Claude Code on claude.ai or the Claude mobile app. The card shows **Building** until a PR exists for the branch, then **PR #n**.
 
-Stories you start from the Presto move to a **Your builds** group at the top of the list, coloured by state: blue while building, amber once a PR is open, green when it merges, grey if the PR was closed. While a build is running the Presto checks every minute instead of every 5 minutes. When a build's PR merges, the Presto plays a short chime, flashes its lights green and shows a **MERGED** banner until you tap it. It remembers which merges it has announced in `story_map_notified.txt` on the device, so a restart doesn't repeat them. Merged builds drop off the list a day after they merge. Once merged, a card also shows the build's estimated cost, and the banner and the story's details show the cost and tokens. Tapping a build card opens its details, and swiping there moves between your builds. The feed reads them from the story's `estimatedCostUsd` and `tokens` on `origin/main`, which the PR that finishes the story records.
+Stories you start from the Presto move to a **Your builds** group at the top of the list, coloured by state: blue while building, amber once a PR is open, green when it merges, grey if the PR was closed. While a build is running the Presto checks every minute instead of every 5 minutes. When a build's PR merges, the Presto plays a short chime, flashes its lights green and shows a **MERGED** banner until you tap it. It remembers which merges it has announced in `story_map_notified.txt` on the device, so a restart doesn't repeat them. Merged builds drop off the list a day after they merge. Once merged, a card also shows the build's estimated cost, the banner shows the cost and tokens, and the story's details note them in small text at the bottom. Tapping a build card opens its details, and swiping there moves between your builds. The feed reads them from the story's `estimatedCostUsd` and `tokens` on `origin/main`, which the PR that finishes the story records.
 
 Merge state comes from the PR (`gh pr list --head <branch>`), since the PR that finishes a story is the one that marks it `merged` in the map.
 

@@ -11,11 +11,12 @@
 //   node feed.mjs --out next.json        # write the feed once instead of serving
 //
 // GET  /next.json      the feed. The map is re-read on every request.
-// POST /build/<ID>     needs the X-Build-Token header. Claims the story on this
+// POST /build/<ID>?mode=auto|accept-edits|plan
+//                      needs the X-Build-Token header. Claims the story on this
 //                      machine, makes a worktree on the story's branch from
-//                      origin/main, and opens Terminal running Claude Code in plan
-//                      mode with Remote Control, so the session shows in the Claude
-//                      app and asks its questions there.
+//                      origin/main, and opens Terminal running Claude Code in that
+//                      permission mode (plan if none is given) with Remote Control,
+//                      so the session shows in the Claude app.
 
 import { execFileSync } from "node:child_process";
 import { randomBytes, timingSafeEqual } from "node:crypto";
@@ -39,6 +40,26 @@ const statePath = join(buildsDir, "state.json");
 const tokenPath = join(here, ".build-token");
 const claimStore = ".git/story-map-claims"; // local claims: nothing is pushed to the remote
 const rulesPath = join(here, "build-rules.md");
+
+// The modes the Presto offers after Build with Claude, keyed by its ?mode= value.
+// Each runs Claude Code in that permission mode with build-rules.md plus its own rules.
+const MODES = {
+  auto: {
+    flag: "auto",
+    rules: "build-rules-auto.md",
+    message: "It builds and opens a PR, then you can ask it to merge in the Claude app.",
+  },
+  "accept-edits": {
+    flag: "acceptEdits",
+    rules: "build-rules-accept-edits.md",
+    message: "Answer any questions in the Claude app, then it builds.",
+  },
+  plan: {
+    flag: "plan",
+    rules: "build-rules-plan.md",
+    message: "Answer its questions and approve its plan in the Claude app.",
+  },
+};
 
 function parseArgs(list) {
   const out = {};
@@ -170,7 +191,9 @@ function shellQuote(text) {
   return `'${String(text).replaceAll("'", `'\\''`)}'`;
 }
 
-async function startBuild(id) {
+async function startBuild(id, modeName = "plan") {
+  const mode = MODES[modeName];
+  if (!mode) return [400, { error: `Unknown mode ${modeName}. Use ${Object.keys(MODES).join(", ")}.` }];
   const feed = buildFeed();
   const story = feed.ready.find((s) => s.id === id);
   if (!story) return [404, { error: `${id} is not one of the stories ready to build.` }];
@@ -197,8 +220,8 @@ async function startBuild(id) {
       `# Started from the Presto for ${id}.`,
       `cd ${shellQuote(worktree)} || exit 1`,
       `printf '\\e]0;%s\\a' ${shellQuote(name)}`,
-      `exec claude --remote-control ${shellQuote(name)} --name ${shellQuote(name)} --permission-mode plan \\`,
-      `  --append-system-prompt "$(cat ${shellQuote(rulesPath)})" \\`,
+      `exec claude --remote-control ${shellQuote(name)} --name ${shellQuote(name)} --permission-mode ${mode.flag} \\`,
+      `  --append-system-prompt "$(cat ${shellQuote(rulesPath)} ${shellQuote(join(here, mode.rules))})" \\`,
       `  "$(cat ${shellQuote(briefPath)})"`,
       "",
     ].join("\n"),
@@ -206,9 +229,9 @@ async function startBuild(id) {
   );
 
   if (dryRun) {
-    state[id] = { title: fullTitle, branch, worktree, startedAt: new Date().toISOString(), dryRun: true };
+    state[id] = { title: fullTitle, branch, worktree, mode: modeName, startedAt: new Date().toISOString(), dryRun: true };
     writeState(state);
-    console.log(`[dry run] ${id}: would claim, add ${worktree} on ${branch}, and run ${scriptPath}`);
+    console.log(`[dry run] ${id} (${modeName}): would claim, add ${worktree} on ${branch}, and run ${scriptPath}`);
     return [200, { ok: true, dryRun: true, branch, message: `Dry run: nothing started for ${id}.` }];
   }
 
@@ -237,10 +260,10 @@ async function startBuild(id) {
     return [500, { error: `Worktree ready, but Terminal did not open. Run: zsh ${scriptPath}` }];
   }
 
-  state[id] = { title: fullTitle, branch, worktree, startedAt: new Date().toISOString() };
+  state[id] = { title: fullTitle, branch, worktree, mode: modeName, startedAt: new Date().toISOString() };
   writeState(state);
-  console.log(`Started ${id} on ${branch}`);
-  return [200, { ok: true, branch, message: "Answer its questions in the Claude app." }];
+  console.log(`Started ${id} on ${branch} in ${modeName} mode`);
+  return [200, { ok: true, branch, mode: modeName, message: mode.message }];
 }
 
 // ---------- Feed ----------
@@ -363,14 +386,15 @@ if (args.out) {
         console.log(`${new Date().toLocaleTimeString()} ${who} feed`);
         return;
       }
-      const match = req.method === "POST" && req.url.match(/^\/build\/([A-Za-z0-9][A-Za-z0-9_-]{0,63})$/);
+      const url = new URL(req.url, "http://presto");
+      const match = req.method === "POST" && url.pathname.match(/^\/build\/([A-Za-z0-9][A-Za-z0-9_-]{0,63})$/);
       if (match) {
         if (!tokenMatches(req.headers["x-build-token"])) {
           console.log(`${new Date().toLocaleTimeString()} ${who} build ${match[1]} refused: bad token`);
           send(res, 401, { error: "Wrong or missing build token." });
           return;
         }
-        const [status, body] = await startBuild(match[1]);
+        const [status, body] = await startBuild(match[1], url.searchParams.get("mode") ?? "plan");
         if (body.ok) refresh();
         console.log(`${new Date().toLocaleTimeString()} ${who} build ${match[1]}: ${status} ${body.error ?? body.message}`);
         send(res, status, body);
