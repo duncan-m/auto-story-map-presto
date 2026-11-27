@@ -4,6 +4,8 @@ Shows the next stories you can build from Auto Story Map on a Pimoroni Presto.
 
 A story counts as available when it is `planned` and every story in its `dependsOn` is `merged` or `shipped`. Stories are listed in release order, then in the order they appear in the map.
 
+![Three Presto screens: the Next up list with Your builds, a story's details with Build with Claude, and the choice of Auto, Accept edits or Plan](docs/screens.png)
+
 ## How it works
 
 - `feed.mjs` runs on your computer. It reads `product/story-map.yaml` with the `story-map` CLI each time it gets a request and serves a small JSON file at `/next.json`.
