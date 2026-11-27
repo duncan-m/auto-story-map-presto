@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Keeps feed.mjs running on your Mac: starts it at login and restarts it if it stops.
+
+  1. Copy this file to ~/Library/LaunchAgents/story-map-feed.plist
+  2. Replace /path/to/story-map-presto with this folder, and /usr/local/bin/node with
+     the output of `which node`. To pass feed.mjs options, such as the repo path, add
+     each word as its own string line in ProgramArguments (see the README).
+  3. Load it:    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/story-map-feed.plist
+     Unload it:  launchctl bootout gui/$(id -u)/story-map-feed
+     Logs:       tail -f /path/to/story-map-presto/builds/feed.log
+
+  The first build you start asks whether node may control Terminal. Allow it.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>story-map-feed</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/bin/node</string>
+    <string>/path/to/story-map-presto/feed.mjs</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>/path/to/story-map-presto</string>
+
+  <!-- gh, git and the story-map CLI need a normal PATH. Add Homebrew's bin if you use it. -->
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+
+  <key>StandardOutPath</key>
+  <string>/path/to/story-map-presto/builds/feed.log</string>
+  <key>StandardErrorPath</key>
+  <string>/path/to/story-map-presto/builds/feed.log</string>
+</dict>
+</plist>

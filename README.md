@@ -60,26 +60,47 @@ The LEDs on the back glow green when stories are available, blue when none are, 
 ## Set up
 
 1. Plug the Presto into your Mac with a USB-C data cable. It already runs Pimoroni's MicroPython firmware.
-2. Save your Wi-Fi details onto it. The script asks for them and writes them straight to the Presto:
+2. Install `mpremote`, which copies files to the Presto, into `.venv`:
 
    ```sh
-   ./set-wifi.sh
+   /usr/bin/python3 -m venv .venv && .venv/bin/pip install mpremote
    ```
 
-3. Start the feed (Node 20+). By default it reads `../auto-story-map`, and it prints the `FEED_URL` the Presto should use:
+3. Start the feed (Node 20+). By default it reads `../auto-story-map`. On first run it creates `.build-token`, and it prints the `FEED_URL` the Presto should use:
 
    ```sh
    node feed.mjs
    ```
 
-   Options: `--repo <path>`, `--map <path>`, `--port 8787`, `--limit 20`. `FEED_URL` lives in the Presto's `secrets.py`.
+   Options: `--repo <path>`, `--map <path>`, `--port 8787`, `--limit 20`, `--dry-run`.
 
-4. Copy the app across. It's named `story_map.py` so it appears in the Presto's launcher as **Story Map**, leaving the launcher's own `main.py` alone:
+4. Make the Presto's settings from the template. Fill in your Wi-Fi, the `FEED_URL` from step 3 and the contents of `.build-token`, then copy it across. `secrets.py` is git-ignored:
 
    ```sh
-   .venv/bin/mpremote cp story_map.py :story_map.py
+   cp secrets.py.example secrets.py
+   .venv/bin/mpremote cp secrets.py :secrets.py
    ```
 
-The Presto and your Mac must be on the same network. If macOS asks whether to let `node` accept incoming connections, allow it. `.venv` holds `mpremote`; recreate it with `/usr/bin/python3 -m venv .venv && .venv/bin/pip install mpremote`.
+   To change the Wi-Fi details later, run `./set-wifi.sh`. It asks for them and writes them straight to the Presto, keeping the rest of `secrets.py`.
+
+5. Copy the app across and restart the Presto. It's named `story_map.py` so it appears in the Presto's launcher as **Story Map**, leaving the launcher's own `main.py` alone:
+
+   ```sh
+   .venv/bin/mpremote cp story_map.py :story_map.py && .venv/bin/mpremote reset
+   ```
+
+   Copying stops whatever the Presto is running, so always reset afterwards.
+
+The Presto and your Mac must be on the same network. If macOS asks whether to let `node` accept incoming connections, allow it. `FEED_URL` uses your Mac's address, so if the Presto shows **Offline** after your Mac changes network or gets a new address, update `FEED_URL`. To stop that happening, reserve the Mac's address on your router.
+
+### Keep the feed running
+
+The Presto goes offline whenever `feed.mjs` stops. `launchd/story-map-feed.plist.example` is a template for a launchd agent that starts it at login and restarts it if it exits. Its comments say which paths to fill in. Copy it to `~/Library/LaunchAgents/story-map-feed.plist`, fill it in, then:
+
+```sh
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/story-map-feed.plist
+```
+
+Its output goes to `builds/feed.log`. The first build you start asks whether `node` may control Terminal. Allow it.
 
 `preview.svg` shows a rough version of the layout, rendered from a simulated run.
