@@ -1,6 +1,6 @@
 # Story map on a Presto
 
-Shows the next stories you can build from Auto Story Map on a Pimoroni Presto.
+Shows the next stories you can build from [Auto Story Map](https://github.com/duncan-m/auto-story-map) on a [Pimoroni Presto](https://learn.pimoroni.com/article/getting-started-with-presto).
 
 A story counts as available when it is `planned` and every story in its `dependsOn` is `merged` or `shipped`. Stories are listed in release order, then in the order they appear in the map.
 
